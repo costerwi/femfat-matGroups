@@ -7,9 +7,9 @@ Define FEMFAT element groups for each material found in an Abaqus .odb file.
 
 ## Optional automatic execution
 
-Copy the `onJobCompletion()` method into your local abaqus_v6.env file for
-automatic execution whenever an Abaqus job completes. Make sure this
-script is in the working directory or the PYTHONPATH
+Copy the `onJobCompletion()` method into your local `abaqus_v6.env` file for
+automatic execution whenever an Abaqus job completes. Make sure `matGroups.py`
+is in the working directory or the PYTHONPATH
 
 ## Description
 
