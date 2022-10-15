@@ -1,0 +1,185 @@
+# Use this FEMFAT script to auto assign .ffd materials to groups of the same name.
+#
+# Element groups will be extended to nodes before assignment.
+# Nodes and elements will also be added and an "merged Group" for analysis.
+#
+# Used effectively in combination with matGroups.py Abaqus python script which
+# creates FEMFAT groups based on Abaqus assigned material names.
+#
+# Install in FEMFAT templates directory to use interactively in FEMFAT GUI or
+# use this syntax in .ffj for batch execution:
+#
+# source "assignMaterials.ffj"
+#
+# Carl Osterwisch
+# Latest version: https://github.com/costerwi/femfat-matGroups
+
+namespace eval ::assignMaterials {
+
+set version 1.0.0
+
+# Find all groups matching specified name
+proc findGroups {groupName} {
+    set Doc [.femfat getDoc]
+    set groups {}
+    set numrows [$Doc getNum GUI_Group:Group]
+    set needle "- [string tolower $groupName]\\M"; # regexp to search for
+    for {set row 0} {$row < $numrows} {incr row} {
+        set thisGroup [$Doc getIth GUI_Group:Group $row]; # full name including number
+        if {[regexp -nocase -- $needle "$thisGroup "]} {
+            lappend groups $thisGroup
+        }
+    }
+    return $groups
+}
+
+# Return a list of group numbers without names
+proc groupIds {groups} {
+    set ids {}
+    foreach group $groups {
+        lappend ids [lindex $group 0]; # just the group number
+    }
+    return $ids
+}
+
+# Return ranges of continuous numbers within list of integers
+proc ranges {intList} {
+    if {0 == [llength $intList]} { return }
+    set fromTo {}
+    foreach current [lsort -unique -integer $intList] {
+        if {0 == [llength $fromTo]} {
+            lappend fromTo $current; # first "from"
+        } elseif {$current > $previous + 1} {
+            lappend fromTo $previous $current; # break in numbers
+        }
+        set previous $current
+    }
+    lappend fromTo $current; # final "to"
+    return $fromTo
+}
+
+# Define a detailed results group based on list of node labels and return with
+# "completed DETAIL" group active for analysis of those nodes.
+# Example usage from .ffj file:
+#   ::assignMaterials::detailed {101 102 205}
+proc detailed {nodeLabels} {
+    set Doc [.femfat getDoc]
+    $Doc writeCommentLine "Assign nodes to DETAILED RESULTS"
+    $Doc setValue {} {} GUI_Group:OperatorAttrib 2; # prepare to copy range of node labels
+    foreach {labelFrom labelTo} [ranges $nodeLabels] {
+        $Doc setValue {} {} GUI_Group:NodeLabelFrom $labelFrom
+        $Doc setValue {} {} GUI_Group:NodeLabelTo $labelTo
+        set detailedGroup [lindex [findGroups "DETAILED RESULTS"] end]
+        if {{} eq $detailedGroup} {
+            $Doc setValue {} {0 ok} GUI_Group:DetailedResultGroup
+        } else {
+            if {[$Doc getValue GUI_Group:Group] ne $detailedGroup} {
+                $Doc setValue {} {} GUI_Group:Group $detailedGroup
+            }
+            $Doc setValue {} {0 ok} GUI_Group:Add
+        }
+    }
+    set detailedGroupId [lindex [groupIds [findGroups "DETAILED RESULTS"]] end]
+    if {{} eq $detailedGroupId} { return }; # group not found
+    $Doc setValue {} {} GUI_Group:OperatorAttrib 5; # prepare to copy nodes from groupId
+    $Doc setValue {} {} GUI_Group:NodeInGroupFrom $detailedGroupId
+    $Doc setValue {} {} GUI_Group:NodeInGroupTo $detailedGroupId
+    $Doc setValue {1 {{setValue {} {} GUI_Group:Label 1}
+        {setValue {} {} GUI_Group:Name "completed DETAIL"}}} {0 ok 1 ok} GUI_Group:New
+    $Doc setValue {} {} GUI_Group:Complete
+    return [$Doc getValue GUI_Group:Group]; # active "completed DETAIL" group
+}
+
+# Combine list of groups into "merged Group" for analysis
+proc mergeGroups {groups} {
+    set Doc [.femfat getDoc]
+    set mergedGroup {}
+    foreach {groupIdFrom groupIdTo} [ranges [groupIds $groups]] {
+        $Doc setValue {} {} GUI_Group:OperatorAttrib 5; # prepare to copy nodes from groupId
+        $Doc setValue {} {} GUI_Group:NodeInGroupFrom $groupIdFrom
+        $Doc setValue {} {} GUI_Group:NodeInGroupTo $groupIdTo
+        set mergedGroup [lindex [findGroups "merged Group"] 0]
+        if {{} eq $mergedGroup} {
+            # Create mergedGroup using nodes from groupId
+            $Doc setValue {1 {{setValue {} {} GUI_Group:Label 1}
+                {setValue {} {} GUI_Group:Name "merged Group"}}} {0 ok 1 ok} GUI_Group:New
+        } else {
+            # Activate existing mergedGroup and add groupId nodes
+            if {[$Doc getValue GUI_Group:Group] ne $mergedGroup} {
+                $Doc setValue {} {} GUI_Group:Group $mergedGroup
+            }
+            $Doc setValue {} {0 ok} GUI_Group:Add
+        }
+        $Doc setValue {} {} GUI_Group:OperatorAttrib 6; # prepare to also copy elements from groupId
+        $Doc setValue {} {} GUI_Group:ElemInGroupFrom $groupIdFrom
+        $Doc setValue {} {} GUI_Group:ElemInGroupTo $groupIdTo
+        $Doc setValue {} {0 ok} GUI_Group:Add; # add elements to mergedGroup
+    }
+    return $mergedGroup
+}
+
+# Load specified ffd and return its complete material id
+proc loadMaterial {ffd} {
+    set Doc [.femfat getDoc]
+    $Doc setValue {} {0 ok 1 ok} MaterialReadFile $ffd
+    return [$Doc getValue MaterialLabel]
+}
+
+# Assign material to nodes and nodes related to elements in list of groups
+proc assignMaterial {material groups} {
+    set Doc [.femfat getDoc]
+    foreach group $groups {
+        $Doc setValue {} {} GUI_Group:Group $group; # make groupId active
+        $Doc setValue {} {} GUI_Group:OperatorAttrib 9; # prepare to add nodes related to elements in groupId
+        $Doc setValue {} {0 ok} GUI_Group:Add; # add related nodes
+        $Doc setValue {} {} FatParamMaterial $material; # assign material to group
+    }
+}
+
+# Loop over specified ffd material files and assign to groups matching name.
+# Finishes with "merged Group" active and containing all assigned nodes and elements.
+proc fromFiles {files} {
+    set Doc [.femfat getDoc]
+    $Doc writeCommentLine "assignMaterials $::assignMaterials::version"
+    set assignedGroups {}
+    set missingGroups {}
+    set saveOperatorAttrib [$Doc getValue GUI_Group:OperatorAttrib]
+    foreach ffd [lsort -unique $files] {
+        set baseName [file rootname [file tail $ffd]]
+        set groups [findGroups $baseName]; # find groups matching ffd name
+        if {0 == [llength $groups]} {
+            $Doc writeCommentLine "WARNING: No Groups found to assign $ffd"
+            lappend missingGroups $ffd
+            continue
+        }
+        assignMaterial [loadMaterial $ffd] $groups
+        set assignedGroups [concat $assignedGroups $groups]
+    }
+
+    set message {}
+    if {0 < [llength $assignedGroups]} {
+        $Doc writeCommentLine "Combine all assigned groups into merged Group"
+        mergeGroups $assignedGroups
+        lappend message "Materials assigned for these groups:\n[join $assignedGroups \n]"
+    }
+
+    if {0 == $::batchmode} {; # report status to interactive user
+        if {0 < [llength $missingGroups]} {
+            lappend message "No matching groups found to assign:\n[join $missingGroups \n]"
+        }
+        if {0 < [llength $message]} {
+            nativeDialog .missingGroups "Auto Assign Materials $::assignMaterials::version" \
+                [join $message \n\n] info 0 "OK"
+        }
+    }
+    if {[$Doc getValue GUI_Group:OperatorAttrib] ne $saveOperatorAttrib} {
+        $Doc setValue {} {} GUI_Group:OperatorAttrib $saveOperatorAttrib
+    }
+    return $assignedGroups
+}
+
+fromFiles [glob -nocomplain "*.ffd"]; # assign all ffd files from working directory
+
+}
+
+# vim: filetype=tcl
