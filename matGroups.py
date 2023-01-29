@@ -36,7 +36,7 @@ Carl Osterwisch, August 2021
 """
 
 from __future__ import print_function, with_statement
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 
 def onJobCompletion():
