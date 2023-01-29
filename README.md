@@ -66,8 +66,8 @@ assign the material to the **Node Characteristics** of that group.
 ### FEMFAT GUI execution
 
 Use the menu item `File->Append...` to run `assignMaterials.ffj` in the interactive GUI.
-Alternatively, that script may be copied to the FEMFAT templates directory and
-will alway be available from the menu `Templates->assignMaterials`.
+Alternatively, that script may be copied to the FEMFAT templates directory so it
+will always be available from the FEMFAT GUI menu `Templates->assignMaterials`.
 
 ### FEMFAT Job (.ffj) execution
 
